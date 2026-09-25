@@ -1,0 +1,16 @@
+{
+  "name": "weather-compare",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weather Compare PWA - Boord Owner's weather screen for any two places and any Open-Meteo field.",
+  "scripts": {
+    "serve": "node scripts/serve.js",
+    "test": "node --test tests/unit/*.test.js",
+    "test:e2e": "node --test tests/e2e/*.test.js",
+    "icons": "node scripts/make-icons.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}

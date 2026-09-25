@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Compare</title>
+<meta name="description" content="Historical weather, forecasts, air quality, marine, flood and climate data for any two places, year against year.">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Weather">
+<meta name="theme-color" content="#0A2F6B">
+<script src="./vendor/tailwind.js"></script>
+<link rel="stylesheet" href="./vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="./css/styles.css">
+<script src="./vendor/leaflet/leaflet.js"></script>
+<script src="./vendor/html2canvas/html2canvas.min.js"></script>
+<script src="./vendor/jspdf/jspdf.umd.min.js"></script>
+<script type="module" src="./js/app.js"></script>
+</head>
+<body class="min-h-screen pb-8">
+
+<header class="app-header px-4 py-3">
+  <div class="max-w-7xl mx-auto flex items-start justify-between gap-3">
+    <div>
+      <div class="font-bold text-2xl leading-tight"><i class="fa-solid fa-cloud-sun"></i> Weather Compare</div>
+      <div id="headerDate" class="text-sm text-white/80 mt-0.5">&nbsp;</div>
+    </div>
+    <div class="flex items-start gap-3">
+      <div id="headerWeather" class="text-right text-sm font-semibold text-white/90 space-y-0.5"></div>
+      <button id="refreshBtn" class="text-white/80 hover:text-white p-1" title="Refresh"><i class="fa-solid fa-arrows-rotate"></i></button>
+      <button id="settingsBtn" class="text-white/80 hover:text-white p-1" title="Settings"><i class="fa-solid fa-gear"></i></button>
+    </div>
+  </div>
+</header>
+<div id="offlineBanner" class="offline-banner hidden"><i class="fa-solid fa-wifi"></i> Offline &mdash; showing data already downloaded on this device</div>
+
+<main class="p-4 max-w-7xl mx-auto space-y-4">
+
+  <!-- Locations -->
+  <section class="card space-y-3" id="locationsCard">
+    <div class="flex items-center justify-between gap-2 flex-wrap">
+      <div class="font-semibold">Locations</div>
+      <button id="toggleMapBtn" class="text-sm text-slate-500 hover:text-slate-700"><i class="fa-solid fa-map"></i> <span>Hide map</span></button>
+    </div>
+    <div id="locList" class="space-y-2"></div>
+    <div id="mapPanel" class="space-y-2">
+      <div class="flex gap-2 flex-wrap items-start">
+        <div class="relative flex-1 min-w-[12rem]">
+          <input id="placeSearch" type="search" autocomplete="off" placeholder="Search for a place…"
+                 class="w-full border border-slate-300 rounded-lg p-2 text-sm">
+          <ul id="placeResults" class="hidden absolute z-[1000] left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-64 overflow-y-auto text-sm"></ul>
+        </div>
+        <button id="myLocationBtn" class="btn"><i class="fa-solid fa-location-crosshairs"></i> My location</button>
+      </div>
+      <div id="mapHint" class="text-xs text-slate-500"></div>
+      <div id="map"></div>
+    </div>
+  </section>
+
+  <!-- Chart -->
+  <section class="card">
+    <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+      <div class="font-semibold">Weather, year against year</div>
+      <button id="pdfBtn" class="text-slate-400 hover:text-slate-600" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+    </div>
+    <div id="loadStatus" class="text-xs text-slate-500 mb-3 min-h-[1rem]"></div>
+
+    <div class="mb-3 pb-3 border-b space-y-2">
+      <div id="fieldSlots" class="space-y-2"></div>
+      <div class="text-xs text-slate-500">
+        Up to two measurements &mdash; the first is drawn against the left axis, the second against the right.
+        Any Open-Meteo field: weather, air quality, marine, river discharge or climate projections.
+      </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3">
+      <div id="modeWrap" class="hidden seg" role="group" aria-label="Comparison mode">
+        <button data-mode="overlay">Side by side</button>
+        <button data-mode="diff">Difference (A − B)</button>
+      </div>
+      <label class="inline-flex items-center gap-1.5 text-sm"><input type="checkbox" id="forecastCb"> Show the next 16 days (forecast, faded)</label>
+      <label id="climateModelWrap" class="hidden text-sm">Climate model
+        <select id="climateModel" class="border border-slate-300 rounded p-1 text-sm ml-1"></select>
+      </label>
+    </div>
+
+    <div class="mb-3 pb-3 border-b">
+      <div class="flex items-center gap-2 flex-wrap mb-2">
+        <span class="text-sm font-medium">Years</span>
+        <button class="btn !py-0.5 !text-xs" data-years="this">This year</button>
+        <button class="btn !py-0.5 !text-xs" data-years="last">Last year</button>
+        <button class="btn !py-0.5 !text-xs" data-years="last5">Last 5</button>
+        <button class="btn !py-0.5 !text-xs" data-years="clear">Clear</button>
+        <button id="yearsToggle" class="text-xs text-slate-500 hover:text-slate-700 ml-auto">Show all years</button>
+      </div>
+      <div id="yearPicker" class="space-y-1"></div>
+    </div>
+
+    <div id="warnings" class="space-y-1 mb-2"></div>
+
+    <div id="chartExport">
+      <div id="chartSubtitle" class="text-xs text-slate-500 mb-1"></div>
+      <div id="chart" class="overflow-x-auto"></div>
+      <div id="legend" class="mt-2"></div>
+    </div>
+  </section>
+
+  <!-- Summary -->
+  <section class="card">
+    <div class="font-semibold mb-1">Summary</div>
+    <div class="text-xs text-slate-500 mb-2">Recorded days only (forecast days are left out). When comparing, only days both locations have are counted.</div>
+    <div id="summary" class="overflow-x-auto text-sm"></div>
+  </section>
+
+  <footer class="text-xs text-slate-500 text-center space-y-1">
+    <div>Weather data by <a class="underline" href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0) &middot;
+      Map &copy; <a class="underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div>
+    <div id="appVersion"></div>
+  </footer>
+</main>
+
+<!-- Field picker -->
+<dialog id="fieldDialog">
+  <div class="p-4 space-y-3">
+    <div class="flex items-center justify-between">
+      <div class="font-semibold" id="fieldDialogTitle">Choose a measurement</div>
+      <button class="text-slate-400 hover:text-slate-600" data-close><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <input id="fieldSearch" type="search" placeholder="Search fields (e.g. soil, gust, pm2.5, 850 hPa)…" class="w-full border border-slate-300 rounded-lg p-2 text-sm">
+    <div id="sourceChips" class="flex flex-wrap gap-1"></div>
+    <div id="fieldList" class="max-h-[55vh] overflow-y-auto -mx-1 px-1"></div>
+  </div>
+</dialog>
+
+<!-- Settings -->
+<dialog id="settingsDialog">
+  <div class="p-4 space-y-4">
+    <div class="flex items-center justify-between">
+      <div class="font-semibold">Settings</div>
+      <button class="text-slate-400 hover:text-slate-600" data-close><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+      <label>Temperature
+        <select id="unitTemp" class="block w-full border border-slate-300 rounded p-1.5 mt-1">
+          <option value="celsius">°C</option><option value="fahrenheit">°F</option>
+        </select></label>
+      <label>Wind speed
+        <select id="unitWind" class="block w-full border border-slate-300 rounded p-1.5 mt-1">
+          <option value="kmh">km/h</option><option value="ms">m/s</option><option value="mph">mph</option><option value="kn">knots</option>
+        </select></label>
+      <label>Precipitation
+        <select id="unitPrecip" class="block w-full border border-slate-300 rounded p-1.5 mt-1">
+          <option value="mm">mm</option><option value="inch">inches</option>
+        </select></label>
+    </div>
+    <div class="border-t pt-3 text-sm space-y-2">
+      <div>Downloaded data is kept on this device so years you have already looked at open instantly and work offline.</div>
+      <div class="flex items-center gap-3"><button id="clearCacheBtn" class="btn"><i class="fa-solid fa-trash"></i> Clear downloaded data</button>
+        <span id="cacheInfo" class="text-xs text-slate-500"></span></div>
+    </div>
+    <div class="border-t pt-3 text-xs text-slate-500">
+      Data: Open-Meteo &mdash; free for non-commercial use, about 10,000 requests a day. Historical weather is the ERA5
+      reanalysis (1940 onward); fields it lacks come from archived forecasts (2016 onward).
+    </div>
+  </div>
+</dialog>
+
+</body>
+</html>
