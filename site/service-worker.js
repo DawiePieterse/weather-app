@@ -7,7 +7,7 @@
 // tiles are cross-origin and pass straight through: weather data is cached by
 // the app itself in IndexedDB (js/cache.js), where it can be keyed by year.
 const CACHE_PREFIX = "weather-compare-";
-const CACHE = "weather-compare-v1";
+const CACHE = `${CACHE_PREFIX}v1`;
 const REVALIDATE_TIMEOUT_MS = 10000;
 const SHELL = [
   "./",
