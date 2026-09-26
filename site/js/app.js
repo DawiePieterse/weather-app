@@ -3,9 +3,9 @@
 // between the location card, the chart card and the dialogs.
 
 import { addDays, refX, todayStr, xLabel, yearsText } from "./dates.js";
-import { AGGS, CLIMATE_MODELS, FIELDS, SOURCES, defaultAgg, fieldById, firstYear, isUnavailable,
-         lastYear, unitLabel } from "./fields.js";
-import { MAX_FIELDS, MAX_QUESTION, loadState, saveState } from "./state.js";
+import { AGGS, CLIMATE_MODELS, COVERAGE, FIELDS, SOURCE_LABEL, defaultAgg, fieldById, firstYear,
+         isUnavailable, lastYear, unitLabel } from "./fields.js";
+import { MAX_FIELDS, MAX_QUESTION, loadState, roundCoord, saveState } from "./state.js";
 import { WEATHER_HORIZON_DAYS, fetchCurrent, searchPlaces, RateLimitError } from "./openmeteo.js";
 import { loadLocation } from "./data.js";
 import { cacheClear, cacheCount } from "./cache.js";
@@ -120,6 +120,8 @@ function renderLocations() {
 
 async function placeLocation(id, { lat, lon, name }) {
   const firstPlacement = !state.locs[id];
+  lat = roundCoord(lat);
+  lon = roundCoord(lon);
   state.locs[id] = { lat, lon, name: name || coordName(lat, lon) };
   settingId = id;
   update();
@@ -183,7 +185,7 @@ function bindLocations() {
     const r = $("placeResults")._results[Number(btn.dataset.i)];
     $("placeResults").classList.add("hidden");
     $("placeSearch").value = "";
-    placeLocation(settingId, { lat: Math.round(r.lat * 1e4) / 1e4, lon: Math.round(r.lon * 1e4) / 1e4, name: r.name })
+    placeLocation(settingId, { lat: r.lat, lon: r.lon, name: r.name })
       .then(() => picker?.fit(state.locs));
   });
   document.addEventListener("click", (e) => {
@@ -193,9 +195,7 @@ function bindLocations() {
   $("myLocationBtn").addEventListener("click", () => {
     if (!navigator.geolocation) { toast("This device can't share its location"); return; }
     navigator.geolocation.getCurrentPosition(
-      (pos) => placeLocation(settingId, {
-        lat: Math.round(pos.coords.latitude * 1e4) / 1e4, lon: Math.round(pos.coords.longitude * 1e4) / 1e4,
-      }).then(() => picker?.fit(state.locs)),
+      (pos) => placeLocation(settingId, { lat: pos.coords.latitude, lon: pos.coords.longitude }).then(() => picker?.fit(state.locs)),
       () => toast("Couldn't get your location - check the browser's location permission"),
       { enableHighAccuracy: false, timeout: 10000 });
   });
@@ -213,7 +213,7 @@ function toggleMap(show) {
 // ---------------------------------------------------------------- measurements
 
 function sourceBadge(field) {
-  return `<span class="badge">${SOURCES[Object.keys(SOURCES).find((k) => SOURCES[k].key === field.source)].label}</span>`;
+  return `<span class="badge">${SOURCE_LABEL[field.source]}</span>`;
 }
 
 function renderSlots() {
@@ -271,18 +271,17 @@ function openFieldDialog(slot) {
 }
 
 function renderSourceChips() {
-  const chips = [["all", "All"], ...Object.values(SOURCES).map((s) => [s.key, s.label])];
+  const chips = [["all", "All"], ...Object.entries(SOURCE_LABEL)];
   $("sourceChips").innerHTML = `<div class="seg flex-wrap">${chips.map(([k, label]) =>
     `<button data-source="${k}" class="${sourceFilter === k ? "active" : ""}">${label}</button>`).join("")}</div>`;
 }
 
 function fieldEndpoints(field) {
-  if (field.source !== "weather") return [field.source];
-  return field.apis.map((a) => a);
+  return field.source === "weather" ? field.apis : [field.source];
 }
 
 function coverageText(field) {
-  if (field.source === "climate") return "1950–2050";
+  if (field.source === "climate") return `${COVERAGE.climate}–${COVERAGE.climateEnd}`;
   const from = firstYear(field);
   return field.source === "weather" && !field.apis.includes("fc") ? `${from} – ~a week ago` : `${from} – forecast`;
 }
@@ -294,7 +293,7 @@ function renderFieldList() {
   if (!matches.length) { $("fieldList").innerHTML = `<div class="text-sm text-slate-500 p-3">No fields match.</div>`; return; }
   const groups = new Map();
   for (const f of matches) {
-    const g = `${SOURCES[Object.keys(SOURCES).find((k) => SOURCES[k].key === f.source)].label} · ${f.group}${f.res === "daily" ? " (daily values)" : ""}`;
+    const g = `${SOURCE_LABEL[f.source]} · ${f.group}${f.res === "daily" ? " (daily values)" : ""}`;
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(f);
   }
@@ -405,6 +404,13 @@ function bindOptions() {
 
 function setStatus(html) { $("loadStatus").innerHTML = html; }
 
+function showEmpty(html) {
+  lastDrawn = null;
+  $("chart").innerHTML = `<div class="text-sm text-slate-400 p-8 text-center">${html}</div>`;
+  $("legend").innerHTML = ""; $("summary").innerHTML = ""; $("chartSubtitle").textContent = "";
+  setStatus("");
+  renderAskChips();
+}
 
 async function refresh() {
   const seq = ++refreshSeq;
@@ -414,21 +420,9 @@ async function refresh() {
   $("warnings").innerHTML = "";
 
   if (!locs.length) {
-    lastDrawn = null;
-    $("chart").innerHTML = `<div class="text-sm text-slate-400 p-8 text-center"><i class="fa-solid fa-map-location-dot text-2xl mb-2 block"></i>Choose a location on the map to begin</div>`;
-    $("legend").innerHTML = ""; $("summary").innerHTML = ""; $("chartSubtitle").textContent = "";
-    setStatus("");
-    renderAskChips();
-    return;
+    return showEmpty(`<i class="fa-solid fa-map-location-dot text-2xl mb-2 block"></i>Choose a location on the map to begin`);
   }
-  if (!years.length) {
-    lastDrawn = null;
-    $("chart").innerHTML = `<div class="text-sm text-slate-400 p-8 text-center">Pick at least one year below</div>`;
-    $("legend").innerHTML = ""; $("summary").innerHTML = "";
-    setStatus("");
-    renderAskChips();
-    return;
-  }
+  if (!years.length) return showEmpty("Pick at least one year below");
 
   const progress = {};
   const showProgress = () => {

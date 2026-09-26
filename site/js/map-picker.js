@@ -5,6 +5,7 @@
 // Pins are plain divIcons (a lettered circle) rather than Leaflet's image
 // markers, so nothing beyond leaflet.js/.css has to be vendored or cached.
 
+import { fetchWithTimeout } from "./openmeteo.js";
 import { roundCoord } from "./state.js";
 
 export const PIN_COLORS = { A: "#2563eb", B: "#ea580c" };
@@ -25,10 +26,7 @@ function pinIcon(id) {
 export async function reverseGeocode(lat, lon) {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=${lat}&lon=${lon}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch(url, { signal: controller.signal, headers: { "Accept-Language": "en" } });
-    clearTimeout(timer);
+    const res = await fetchWithTimeout(fetch, url, 6000, { headers: { "Accept-Language": "en" } });
     if (!res.ok) throw new Error();
     const body = await res.json();
     const a = body.address || {};

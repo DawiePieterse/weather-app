@@ -12,6 +12,7 @@ import { addDays, refX } from "./dates.js";
 import { ARCHIVE_LAG_DAYS, dailyToMap, fetchSegment, horizonFor, hourlyToDaily, planSegments,
          RateLimitError } from "./openmeteo.js";
 import { cacheGet, cachePut } from "./cache.js";
+import { unitSetting } from "./fields.js";
 
 // Years per request: hourly data is ~8,760 values per variable per year, so
 // hourly requests stay at five years (the chunk Boord's archive import used);
@@ -22,10 +23,7 @@ export const CHUNK_YEARS = { hourly: 5, daily: 25 };
 export const FRESH_MS = 60 * 60 * 1000;
 
 export function unitSig(field, units) {
-  if (field.unit === "T") return units.temperature;
-  if (field.unit === "W") return units.wind;
-  if (["P", "S", "D"].includes(field.unit)) return units.precipitation;
-  return "-";
+  return unitSetting(field, units) ?? "-";
 }
 
 export function cacheKey(loc, field, agg, units, model, year) {
@@ -55,37 +53,37 @@ export function yearRuns(years, max) {
   return runs;
 }
 
-// specs: [{field, agg}]. Returns
-//   { points: Map(specKey -> Map(year -> [[x, value], ...])), errors: [], dropped: Map(fieldId -> endpoint) }
-// where specKey is `${field.id}|${agg}` and x is dates.refX().
+// specs: [{field, agg, key}]. Returns
+//   { points: Map(spec.key -> Map(year -> [[x, value], ...])), errors: [], dropped: Map(fieldId -> endpoint) }
+// where x is dates.refX().
 export async function loadLocation({ loc, specs, years, units, model, today, onProgress, fetchImpl }) {
   const points = new Map();
   const errors = [];
   const dropped = new Map();
-  const missing = new Map();   // specKey -> [years]
-  const specKey = (s) => `${s.field.id}|${s.agg || "-"}`;
+  const missing = new Map();   // spec.key -> [years]
   const now = Date.now();
 
-  for (const spec of specs) {
-    const key = specKey(spec);
-    points.set(key, new Map());
-    for (const year of years) {
-      const hit = await cacheGet(cacheKey(loc, spec.field, spec.agg, units, model, year));
+  const hits = await Promise.all(specs.flatMap((spec) =>
+    years.map((year) => cacheGet(cacheKey(loc, spec.field, spec.agg, units, model, year)))));
+  specs.forEach((spec, si) => {
+    points.set(spec.key, new Map());
+    years.forEach((year, yi) => {
+      const hit = hits[si * years.length + yi];
       if (hit && (hit.final || now - hit.fetchedAt < FRESH_MS)) {
-        points.get(key).set(year, hit.points);
+        points.get(spec.key).set(year, hit.points);
       } else {
-        if (!missing.has(key)) missing.set(key, []);
-        missing.get(key).push(year);
+        if (!missing.has(spec.key)) missing.set(spec.key, []);
+        missing.get(spec.key).push(year);
       }
-    }
-  }
+    });
+  });
   if (!missing.size) return { points, errors, dropped };
 
   // Plan: one request per (endpoint, resolution, date range), carrying every
   // variable that needs exactly that.
   const requests = new Map();
   for (const spec of specs) {
-    const years_ = missing.get(specKey(spec));
+    const years_ = missing.get(spec.key);
     if (!years_) continue;
     for (const [y0, y1] of yearRuns(years_, CHUNK_YEARS[spec.field.res])) {
       for (const seg of planSegments(spec.field, `${y0}-01-01`, `${y1}-12-31`, today)) {
@@ -121,12 +119,12 @@ export async function loadLocation({ loc, specs, years, units, model, today, onP
           const map = res === "hourly"
             ? hourlyToDaily(block.time, values, spec.agg, scale)
             : dailyToMap(block.time, values, scale);
-          const target = days.get(specKey(spec));
+          const target = days.get(spec.key);
           for (const [d, v] of map) target.set(d, v);
         }
       }
     } catch (e) {
-      rSpecs.forEach((s) => failedSpecs.add(specKey(s)));
+      rSpecs.forEach((s) => failedSpecs.add(s.key));
       errors.push(e);
       if (e instanceof RateLimitError) break;
     }
@@ -135,24 +133,28 @@ export async function loadLocation({ loc, specs, years, units, model, today, onP
 
   // Split back into years and cache. A spec whose request failed is not
   // cached - an empty year written now would read as "no data" for good.
-  const last = new Map(specs.map((s) => [specKey(s), horizonFor(s.field, today)]));
+  const writes = [];
   for (const spec of specs) {
-    const key = specKey(spec);
+    const key = spec.key;
     if (!missing.has(key)) continue;
-    const byDay = days.get(key);
+    const last = horizonFor(spec.field, today);
+    const byYear = new Map();
+    for (const [d, v] of days.get(key)) {
+      if (v == null || d > last) continue;
+      const y = Number(d.slice(0, 4));
+      if (!byYear.has(y)) byYear.set(y, []);
+      byYear.get(y).push([refX(d), v]);
+    }
     for (const year of missing.get(key)) {
-      const pts = [];
-      for (const [d, v] of byDay) {
-        if (d.startsWith(`${year}-`) && v != null && d <= last.get(key)) pts.push([refX(d), v]);
-      }
-      pts.sort((a, b) => a[0] - b[0]);
+      const pts = (byYear.get(year) || []).sort((a, b) => a[0] - b[0]);
       points.get(key).set(year, pts);
       if (failedSpecs.has(key)) continue;
-      await cachePut({
+      writes.push(cachePut({
         k: cacheKey(loc, spec.field, spec.agg, units, model, year),
         points: pts, fetchedAt: now, final: isFinalYear(spec.field, year, today),
-      });
+      }));
     }
   }
+  await Promise.all(writes);
   return { points, errors, dropped };
 }

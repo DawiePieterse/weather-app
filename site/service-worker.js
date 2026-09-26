@@ -11,9 +11,9 @@
 // in a cache named for that version (older ones are cleared like old shells)
 // - the model weights are cached by the library itself.
 const CACHE_PREFIX = "weather-compare-";
-const CACHE = "weather-compare-v2";
+const CACHE = `${CACHE_PREFIX}v2`;
 const LIB_PATH = "/npm/@mlc-ai/web-llm@0.2.85/";   // keep in step with js/ai.js
-const LIB_CACHE = "weather-compare-lib-0.2.85";
+const LIB_CACHE = `${CACHE_PREFIX}lib-0.2.85`;
 const REVALIDATE_TIMEOUT_MS = 10000;
 const SHELL = [
   "./",

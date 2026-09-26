@@ -31,11 +31,16 @@ export const UNIT_TOKENS = {
   D: { mm: "m", inch: "ft" },
 };
 
+// The unit setting a field's values follow, or null for a literal unit.
+export function unitSetting(field, units) {
+  if (!UNIT_TOKENS[field.unit]) return null;
+  return field.unit === "T" ? units.temperature : field.unit === "W" ? units.wind : units.precipitation;
+}
+
 export function unitLabel(field, units) {
   const tok = UNIT_TOKENS[field.unit];
   if (!tok) return field.unit;
-  const setting = field.unit === "T" ? units.temperature : field.unit === "W" ? units.wind : units.precipitation;
-  return tok[setting] || Object.values(tok)[0];
+  return tok[unitSetting(field, units)] || Object.values(tok)[0];
 }
 
 export const AGGS = {
@@ -53,6 +58,8 @@ export const SOURCES = {
   f: { key: "flood", label: "Flood (river discharge)" },
   c: { key: "climate", label: "Climate projections" },
 };
+// Source name ("weather", "air"...) -> label.
+export const SOURCE_LABEL = Object.fromEntries(Object.values(SOURCES).map((s) => [s.key, s.label]));
 
 // How a field behaves when reduced to a day. `aggs` lists what makes sense
 // for it (summing temperatures is meaningless; averaging rainfall is not what
