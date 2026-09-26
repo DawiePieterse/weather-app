@@ -25,7 +25,7 @@ export const DEVICE_MODELS = [
 ];
 
 export const PROVIDERS = {
-  gemini: { name: "Google Gemini", label: "Google Gemini (free tier)", model: "gemini-2.5-flash", keyUrl: "https://aistudio.google.com/apikey" },
+  gemini: { name: "Google Gemini", label: "Google Gemini (free tier)", model: "gemini-3.8-flash", keyUrl: "https://aistudio.google.com/apikey" },
   groq: { name: "Groq", label: "Groq (free tier)", model: "llama-3.3-70b-versatile", keyUrl: "https://console.groq.com/keys",
           endpoint: "https://api.groq.com/openai/v1/chat/completions" },
   custom: { name: "Custom endpoint", label: "OpenAI-compatible endpoint (e.g. Cloudflare Workers AI)", model: "@cf/meta/llama-3.1-8b-instruct" },
@@ -244,11 +244,27 @@ export function cloudRequest(messages, s) {
   };
 }
 
-async function askCloud({ messages, settings, onToken, signal }) {
+// Providers retire model names ("gemini-2.5-flash is no longer available
+// ... use models/gemini-3.8-flash"). When the refusal names a replacement,
+// follow it: the default catches up on the next release, the user's answer
+// arrives now. Exported for tests.
+export function suggestedModel(message) {
+  return /use (?:models\/)?([\w.-]+)/i.exec(message || "")?.[1] || null;
+}
+
+async function askCloud({ messages, settings, onToken, signal, retried = false }) {
   const { name } = providerOf(settings);
   const { url, init, delta } = cloudRequest(messages, settings);
   const res = await fetch(url, { ...init, signal });
-  if (!res.ok) throw await failure(res, name);
+  if (!res.ok) {
+    const err = await failure(res, name);
+    const next = !retried && /no longer available|not found|deprecated/i.test(err.message) && suggestedModel(err.message);
+    if (next && next !== (settings.cloudModel || providerOf(settings).model)) {
+      console.warn(`${name}: switching model to ${next} as the service suggested`);
+      return askCloud({ messages, settings: { ...settings, cloudModel: next }, onToken, signal, retried: true });
+    }
+    throw err;
+  }
   let text = "";
   for await (const j of sse(res)) {
     const t = delta(j);
