@@ -259,6 +259,28 @@ test("ask about the comparison: a chip question streams an answer from the cloud
     await page.waitForSelector("#askHistory details");
     assert.match(await page.textContent("#askHistory summary"), /What stands out/);
 
+    // A retired model: the app asks Gemini for its list, picks a flash
+    // model, retries with it, and remembers the pick.
+    await page.unroute(/generativelanguage\.googleapis\.com/);
+    const models = [];
+    await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+      const url = route.request().url();
+      if (/\/v1beta\/models(\?|$)/.test(url)) {
+        return route.fulfill({ json: { models: [
+          { name: "models/gemini-9.0-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-9.0-flash-image", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-embedding-3", supportedGenerationMethods: ["embedContent"] }] } });
+      }
+      models.push(/models\/([^:]+):/.exec(url)[1]);
+      if (models.length === 1) return route.fulfill({ status: 404, json: { error: { message: "models/gemini-3.8-flash is not found for API version v1beta" } } });
+      return route.fulfill({ status: 200, contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "Picked." }] } }] })}\n\n` });
+    });
+    await page.click("#askChips .ask-chip");
+    await page.waitForFunction(() => document.querySelector("#askAnswer")?.textContent === "Picked.", null, { timeout: 15000 });
+    assert.deepEqual(models, ["gemini-3.8-flash", "gemini-9.0-flash"]);
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("wx_ai_models")).gemini), "gemini-9.0-flash");
+
     // Service unreachable: the answer says so, and that the chart still works.
     await page.unroute(/generativelanguage\.googleapis\.com/);
     await page.route(/generativelanguage\.googleapis\.com/, (route) => route.abort("internetdisconnected"));

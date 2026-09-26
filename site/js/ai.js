@@ -25,10 +25,17 @@ export const DEVICE_MODELS = [
 ];
 
 export const PROVIDERS = {
-  gemini: { name: "Google Gemini", label: "Google Gemini (free tier)", model: "gemini-3.8-flash", keyUrl: "https://aistudio.google.com/apikey" },
+  gemini: { name: "Google Gemini", label: "Google Gemini (free tier)", model: "gemini-3.8-flash", keyUrl: "https://aistudio.google.com/apikey",
+            models: "https://generativelanguage.googleapis.com/v1beta/models",
+            // A general "flash" model, newest first; not the image/audio/live/embedding variants.
+            prefer: [/^gemini-[\d.]+-flash$/, /^gemini-[\d.]+-flash-lite$/, /^gemini-.*flash/],
+            avoid: /image|tts|audio|live|embedding|thinking|exp|preview/ },
   groq: { name: "Groq", label: "Groq (free tier)", model: "llama-3.3-70b-versatile", keyUrl: "https://console.groq.com/keys",
-          endpoint: "https://api.groq.com/openai/v1/chat/completions" },
-  custom: { name: "Custom endpoint", label: "OpenAI-compatible endpoint (e.g. Cloudflare Workers AI)", model: "@cf/meta/llama-3.1-8b-instruct" },
+          endpoint: "https://api.groq.com/openai/v1/chat/completions", models: "https://api.groq.com/openai/v1/models",
+          prefer: [/llama.*70b/, /llama.*(?:8|17)b/, /llama/, /gpt-oss|qwen|deepseek|mixtral|gemma/],
+          avoid: /whisper|tts|guard|embed|vision|orpheus|compound|saba|allam/ },
+  custom: { name: "Custom endpoint", label: "OpenAI-compatible endpoint (e.g. Cloudflare Workers AI)", model: "@cf/meta/llama-3.1-8b-instruct",
+            prefer: [/llama.*(?:70|8)b.*instruct/, /instruct/, /./], avoid: /embed|whisper|guard/ },
 };
 
 export function providerOf(s) {
@@ -37,6 +44,52 @@ export function providerOf(s) {
 
 export function deviceModelOf(s) {
   return DEVICE_MODELS.find((d) => d.id === s.deviceModel) || DEVICE_MODELS[0];
+}
+
+// Free tiers retire model names every few months. When the default is gone,
+// the provider's own model list picks a replacement, remembered here per
+// provider so it is not looked up again.
+const MODEL_KEY = "wx_ai_models";
+function resolvedModels() {
+  try { return JSON.parse(localStorage.getItem(MODEL_KEY) || "{}"); } catch { return {}; }
+}
+function rememberModel(provider, model) {
+  const m = resolvedModels();
+  if (model) m[provider] = model; else delete m[provider];
+  try { localStorage.setItem(MODEL_KEY, JSON.stringify(m)); } catch { /* ignore */ }
+}
+
+// The model a request goes to: the user's choice, else a remembered
+// replacement, else the provider's default.
+export function modelFor(s) {
+  return s.cloudModel || resolvedModels()[s.provider] || providerOf(s).model;
+}
+
+// Picks the best available model from a provider's list by its preference
+// patterns, most specific first, newest name first within a pattern.
+// Exported for tests.
+export function pickModel(ids, { prefer, avoid }) {
+  const usable = ids.filter((id) => !avoid.test(id)).sort().reverse();
+  for (const re of prefer) {
+    const hit = usable.find((id) => re.test(id));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function listModels(s, signal) {
+  const p = providerOf(s);
+  const url = p.models || (s.endpoint && s.endpoint.replace(/\/chat\/completions\/?$/, "/models"));
+  if (!url) return [];
+  const headers = s.provider === "gemini" ? { "x-goog-api-key": s.apiKey } : s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {};
+  const res = await fetch(url, { headers, signal });
+  if (!res.ok) return [];
+  const j = await res.json();
+  if (s.provider === "gemini") {
+    return (j.models || []).filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m) => m.name.replace(/^models\//, ""));
+  }
+  return (j.data || []).map((m) => m.id).filter(Boolean);
 }
 
 const SETTINGS_KEY = "wx_ai";
@@ -213,7 +266,7 @@ async function failure(res, provider) {
 // Builds the request for the chosen provider. Exported for tests.
 export function cloudRequest(messages, s) {
   if (s.provider === "gemini") {
-    const model = s.cloudModel || PROVIDERS.gemini.model;
+    const model = modelFor(s);
     const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
     return {
       url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
@@ -238,30 +291,39 @@ export function cloudRequest(messages, s) {
     init: {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: s.cloudModel || p.model, messages, stream: true, temperature: 0.2, max_tokens: 800 }),
+      body: JSON.stringify({ model: modelFor(s), messages, stream: true, temperature: 0.2, max_tokens: 800 }),
     },
     delta: (j) => j.choices?.[0]?.delta?.content || "",
   };
 }
 
 // Providers retire model names ("gemini-2.5-flash is no longer available
-// ... use models/gemini-3.8-flash"). When the refusal names a replacement,
-// follow it: the default catches up on the next release, the user's answer
-// arrives now. Exported for tests.
+// ... use models/gemini-3.8-flash"; "llama-3.3-70b-versatile does not
+// exist"). When the refusal names a replacement, follow it; when it does
+// not, ask the provider what it has and pick by preference. Either way the
+// pick is remembered, so the default catching up on the next release is
+// not what the user waits for. Exported for tests.
 export function suggestedModel(message) {
   return /use (?:models\/)?([\w.-]+)/i.exec(message || "")?.[1] || null;
 }
+export function modelGone(message) {
+  return /no longer available|not found|does not exist|deprecated|decommissioned|not supported/i.test(message || "");
+}
 
 async function askCloud({ messages, settings, onToken, signal, retried = false }) {
-  const { name } = providerOf(settings);
+  const p = providerOf(settings);
   const { url, init, delta } = cloudRequest(messages, settings);
   const res = await fetch(url, { ...init, signal });
   if (!res.ok) {
-    const err = await failure(res, name);
-    const next = !retried && /no longer available|not found|deprecated/i.test(err.message) && suggestedModel(err.message);
-    if (next && next !== (settings.cloudModel || providerOf(settings).model)) {
-      console.warn(`${name}: switching model to ${next} as the service suggested`);
-      return askCloud({ messages, settings: { ...settings, cloudModel: next }, onToken, signal, retried: true });
+    const err = await failure(res, p.name);
+    if (!retried && !settings.cloudModel && modelGone(err.message)) {
+      rememberModel(settings.provider, null);
+      const next = suggestedModel(err.message) || pickModel(await listModels(settings, signal), p);
+      if (next && next !== modelFor(settings)) {
+        console.warn(`${p.name}: switching model to ${next}`);
+        rememberModel(settings.provider, next);
+        return askCloud({ messages, settings, onToken, signal, retried: true });
+      }
     }
     throw err;
   }
