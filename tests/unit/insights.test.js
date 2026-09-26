@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_YEARS, PROSE_REMINDER, SYSTEM_PROMPT, buildMessages, buildSummary, checkAnswer, describeAsk, followUps,
          quickQuestions, quickSummary } from "../../site/js/insights.js";
-import { cloudRequest, plannedEngine, suggestedModel } from "../../site/js/ai.js";
+import { PROVIDERS, cloudRequest, modelGone, pickModel, plannedEngine, suggestedModel } from "../../site/js/ai.js";
 import { fieldById } from "../../site/js/fields.js";
 import { refX } from "../../site/js/dates.js";
 
@@ -170,6 +170,18 @@ test("suggestedModel: the replacement a provider names in a refusal", () => {
   assert.equal(suggestedModel("This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features."), "gemini-3.8-flash");
   assert.equal(suggestedModel("Use llama-3.3-70b-versatile instead"), "llama-3.3-70b-versatile");
   assert.equal(suggestedModel("free-tier limit reached"), null);
+  assert.ok(modelGone("The model `llama-3.3-70b-versatile` does not exist or you do not have access to it."));
+  assert.ok(!modelGone("free-tier limit reached"));
+});
+
+test("pickModel: a provider's list, by preference, newest name first, skipping the odd ones", () => {
+  const groq = ["whisper-large-v3", "llama-guard-4-12b", "llama-3.1-8b-instant", "meta-llama/llama-4-maverick-17b", "openai/gpt-oss-120b", "llama-4-scout-70b"];
+  assert.equal(pickModel(groq, PROVIDERS.groq), "llama-4-scout-70b");
+  assert.equal(pickModel(groq.filter((m) => !m.includes("70b")), PROVIDERS.groq), "meta-llama/llama-4-maverick-17b");
+  assert.equal(pickModel(["whisper-large-v3"], PROVIDERS.groq), null);
+  const gemini = ["gemini-3.5-flash-image", "gemini-3.8-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-4.0-pro", "gemini-embedding-2"];
+  assert.equal(pickModel(gemini, PROVIDERS.gemini), "gemini-3.8-flash");
+  assert.equal(pickModel(["gemini-4.1-flash-lite", "gemini-4.0-pro"], PROVIDERS.gemini), "gemini-4.1-flash-lite");
 });
 
 test("plannedEngine: with no WebGPU (as in Node), auto uses the cloud only when a key is set", async () => {
