@@ -17,10 +17,8 @@ export function toast(message) {
 
 // navigator.onLine only reflects the radio, not whether Open-Meteo is actually
 // reachable, so requests also report their own failures through setOffline().
-let _offline = false;
 export function setOffline(val) {
-  _offline = !!val;
-  document.getElementById("offlineBanner")?.classList.toggle("hidden", !_offline);
+  document.getElementById("offlineBanner")?.classList.toggle("hidden", !val);
 }
 export function bindOffline() {
   window.addEventListener("offline", () => setOffline(true));

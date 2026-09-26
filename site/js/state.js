@@ -6,7 +6,7 @@
 //   #a=-33.9249,18.4241,Cape%20Town&b=...&f=wd.temperature_2m_mean,wh.wind_gusts_10m:max
 //    &y=2024,2025&m=diff&u=celsius,kmh,mm&cm=MRI_AGCM3_2_S&fc=0
 
-import { defaultAgg, fieldById } from "./fields.js";
+import { UNIT_TOKENS, defaultAgg, fieldById } from "./fields.js";
 
 export const MAX_FIELDS = 2;
 const STORAGE_KEY = "wx_state_v1";
@@ -48,10 +48,11 @@ export function encodeState(st) {
   p.push(`y=${st.years.join(",")}`);
   if (st.mode !== "overlay") p.push(`m=${st.mode}`);
   const u = st.units;
-  if (u.temperature !== "celsius" || u.wind !== "kmh" || u.precipitation !== "mm") {
+  const d = defaultState(0).units;
+  if (u.temperature !== d.temperature || u.wind !== d.wind || u.precipitation !== d.precipitation) {
     p.push(`u=${u.temperature},${u.wind},${u.precipitation}`);
   }
-  if (st.fields.some((f) => f.id.startsWith("c"))) p.push(`cm=${st.climateModel}`);
+  if (st.fields.some((f) => fieldById(f.id)?.source === "climate")) p.push(`cm=${st.climateModel}`);
   if (!st.showForecast) p.push("fc=0");
   return p.join("&");
 }
@@ -80,9 +81,9 @@ export function decodeState(hash, currentYear) {
   if (params.get("m") === "diff") st.mode = "diff";
   if (params.has("u")) {
     const [t, w, p] = params.get("u").split(",");
-    if (["celsius", "fahrenheit"].includes(t)) st.units.temperature = t;
-    if (["kmh", "ms", "mph", "kn"].includes(w)) st.units.wind = w;
-    if (["mm", "inch"].includes(p)) st.units.precipitation = p;
+    if (Object.hasOwn(UNIT_TOKENS.T, t)) st.units.temperature = t;
+    if (Object.hasOwn(UNIT_TOKENS.W, w)) st.units.wind = w;
+    if (Object.hasOwn(UNIT_TOKENS.P, p)) st.units.precipitation = p;
   }
   if (params.has("cm")) st.climateModel = params.get("cm");
   if (params.get("fc") === "0") st.showForecast = false;

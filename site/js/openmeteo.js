@@ -67,19 +67,21 @@ export function planSegments(field, start, end, today) {
   return segs;
 }
 
+// Only the non-default units are sent: shorter URLs, and nothing for an API
+// to object to in the common case.
+function setUnitParams(p, units) {
+  if (units?.temperature && units.temperature !== "celsius") p.set("temperature_unit", units.temperature);
+  if (units?.wind && units.wind !== "kmh") p.set("wind_speed_unit", units.wind);
+  if (units?.precipitation && units.precipitation !== "mm") p.set("precipitation_unit", units.precipitation);
+}
+
 export function buildUrl(endpoint, { lat, lon, start, end, hourly = [], daily = [], units, model }) {
   const ep = ENDPOINTS[endpoint];
   const p = new URLSearchParams({ latitude: String(lat), longitude: String(lon), start_date: start, end_date: end });
   if (hourly.length) p.set("hourly", hourly.join(","));
   if (daily.length) p.set("daily", daily.join(","));
   if (ep.tz) p.set("timezone", "auto");
-  // Only the non-default units are sent: shorter URLs, and nothing for an
-  // API to object to in the common case.
-  if (ep.units && units) {
-    if (units.temperature && units.temperature !== "celsius") p.set("temperature_unit", units.temperature);
-    if (units.wind && units.wind !== "kmh") p.set("wind_speed_unit", units.wind);
-    if (units.precipitation && units.precipitation !== "mm") p.set("precipitation_unit", units.precipitation);
-  }
+  if (ep.units) setUnitParams(p, units);
   if (ep.model && model) p.set("models", model);
   return `${ep.url}?${p}`;
 }
@@ -105,11 +107,11 @@ export function allowedRangeIn(reason) {
   return m ? { start: m[1], end: m[2] } : null;
 }
 
-async function fetchWithTimeout(fetchImpl, url, timeoutMs) {
+export async function fetchWithTimeout(fetchImpl, url, timeoutMs, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchImpl(url, { signal: controller.signal });
+    return await fetchImpl(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -213,9 +215,7 @@ export async function fetchCurrent({ lat, lon, units }, fetchImpl = fetch) {
     latitude: String(lat), longitude: String(lon), timezone: "auto",
     current: "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,precipitation,is_day",
   });
-  if (units?.temperature && units.temperature !== "celsius") p.set("temperature_unit", units.temperature);
-  if (units?.wind && units.wind !== "kmh") p.set("wind_speed_unit", units.wind);
-  if (units?.precipitation && units.precipitation !== "mm") p.set("precipitation_unit", units.precipitation);
+  setUnitParams(p, units);
   const res = await fetchWithTimeout(fetchImpl, `${ENDPOINTS.fc.url}?${p}`, 10000);
   if (!res.ok) throw new ApiError(`HTTP ${res.status}`);
   const body = await res.json();
