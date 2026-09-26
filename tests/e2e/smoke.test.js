@@ -183,3 +183,101 @@ test("the field picker filters by search text and source", { timeout: 30000 }, a
     server.close();
   }
 });
+
+test("ask about the comparison: a chip question streams an answer from the cloud fallback", { timeout: 30000 }, async () => {
+  const server = await startServer(0);
+  const base = `http://127.0.0.1:${server.address().port}/`;
+  const browser = await chromium.launch(launchOptions());
+  try {
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => { throw e; });
+    await mockOpenMeteo(page);
+    // Headless Chromium has no WebGPU, so "auto" falls to the cloud key.
+    await page.addInitScript(() => {
+      localStorage.setItem("wx_ai", JSON.stringify({ engine: "auto", provider: "gemini", apiKey: "test-key" }));
+      Object.defineProperty(navigator, "gpu", { value: undefined });
+    });
+    const sent = [];
+    let release;
+    const held = new Promise((r) => { release = r; });
+    let reply = ["A was ", "warmer."];
+    await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
+      await held;   // hold the reply so the loading state can be seen
+      sent.push({ headers: route.request().headers(), body: JSON.parse(route.request().postData()) });
+      const chunk = (t) => `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: t }] } }] })}\n\n`;
+      return route.fulfill({ status: 200, contentType: "text/event-stream", body: reply.map(chunk).join("") });
+    });
+    await page.goto(base);
+
+    await page.waitForSelector("#map.leaflet-container");
+    const box = await (await page.$("#map")).boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForSelector("#chart svg path", { state: "attached", timeout: 15000 });
+
+    await page.waitForSelector("#askChips .ask-chip:not([disabled])");
+    assert.match(await page.textContent("#askEngine"), /Cloud · Google Gemini/);
+    // The quick read needs no model at all.
+    assert.match(await page.textContent("#askQuick"), /Quick read.*Temperature.*mean/s);
+    await page.click("#askChips .ask-chip");
+    // Loading state: spinner naming the engine, input locked, Stop offered.
+    await page.waitForSelector("#askAnswer .ask-waiting");
+    const waiting = await page.textContent("#askAnswer");
+    assert.match(waiting, /Thinking…/);
+    assert.match(waiting, /Analysing temperature for .+ for \d{4}/);
+    assert.match(waiting, /Using free AI model · Cloud · Google Gemini/);
+    assert.equal(await page.getAttribute("#askAnswerWrap", "aria-busy"), "true");
+    assert.ok(await page.isDisabled("#askInput"));
+    assert.ok(await page.isVisible("#askStopBtn"));
+    release();
+    await page.waitForFunction(() => document.querySelector("#askAnswer")?.textContent === "A was warmer.", null, { timeout: 15000 });
+
+    assert.equal(await page.getAttribute("#askAnswerWrap", "aria-busy"), "false");
+    assert.ok(!(await page.isDisabled("#askInput")));
+    assert.equal(sent[0].headers["x-goog-api-key"], "test-key");
+    const prompt = sent[0].body.contents[0].parts[0].text;
+    assert.match(prompt, /^Here is the weather comparison data:/);
+    const json = JSON.parse(prompt.split("\n\n")[1]);
+    assert.ok(json.context.locations.A && json.summary.length > 0);
+    assert.match(prompt, /User question: What stands out/);
+    assert.match(sent[0].body.systemInstruction.parts[0].text, /precise weather comparison assistant/);
+    assert.equal(json.summary[0].A.min_date.length, 10);
+    // The question is in the shareable URL; the key never is.
+    const hash1 = await page.evaluate(() => location.hash);
+    assert.match(hash1, /q=What%20stands%20out/);
+    assert.ok(!hash1.includes("test-key"));
+    assert.ok(await page.isVisible("#askCopyBtn"));
+
+    // A follow-up chip sends the earlier answer along, and the answer's
+    // Markdown is rendered; the previous answer folds into the history.
+    reply = ["- **Because** A is hotter\n- and drier"];
+    await page.click('#askFollowUps [data-q="Why?"]');
+    await page.waitForFunction(() => document.querySelector("#askAnswer li strong")?.textContent === "Because", null, { timeout: 15000 });
+    const turns = sent[1].body.contents.map((c) => `${c.role}: ${c.parts[0].text}`);
+    assert.equal(turns.length, 3);
+    assert.match(turns[1], /^model: A was warmer\.$/);
+    assert.equal(turns[2], "user: User question: Why?");
+    await page.waitForSelector("#askHistory details");
+    assert.match(await page.textContent("#askHistory summary"), /What stands out/);
+
+    // Service unreachable: the answer says so, and that the chart still works.
+    await page.unroute(/generativelanguage\.googleapis\.com/);
+    await page.route(/generativelanguage\.googleapis\.com/, (route) => route.abort("internetdisconnected"));
+    await page.click("#askChips .ask-chip");
+    await page.waitForSelector("#askAnswer.ask-unavailable");
+    const down = await page.textContent("#askAnswer");
+    assert.match(down, /Free AI is currently unavailable/);
+    assert.match(down, /You can still view the chart and summary table/);
+    assert.ok(!(await page.isDisabled("#askInput")));
+
+    // A link with q= asks its question as soon as the chart is up.
+    await page.unroute(/generativelanguage\.googleapis\.com/);
+    await page.route(/generativelanguage\.googleapis\.com/, (route) => route.fulfill({ status: 200, contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "From the link." }] } }] })}\n\n` }));
+    await page.goto(`${base}#a=48.85,2.35,Paris&f=wd.temperature_2m_mean&y=2024&q=Was%20it%20wet%3F`);
+    await page.waitForFunction(() => document.querySelector("#askAnswer")?.textContent === "From the link.", null, { timeout: 15000 });
+    assert.equal(await page.inputValue("#askInput"), "Was it wet?");
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

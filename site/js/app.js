@@ -2,19 +2,24 @@
 // places on a map and any Open-Meteo field. Startup, state, and the wiring
 // between the location card, the chart card and the dialogs.
 
-import { addDays, refX, todayStr, xLabel } from "./dates.js";
+import { addDays, refX, todayStr, xLabel, yearsText } from "./dates.js";
 import { AGGS, CLIMATE_MODELS, FIELDS, SOURCES, defaultAgg, fieldById, firstYear, isUnavailable,
          lastYear, unitLabel } from "./fields.js";
-import { MAX_FIELDS, loadState, saveState } from "./state.js";
+import { MAX_FIELDS, MAX_QUESTION, loadState, saveState } from "./state.js";
 import { WEATHER_HORIZON_DAYS, fetchCurrent, searchPlaces, RateLimitError } from "./openmeteo.js";
 import { loadLocation } from "./data.js";
 import { cacheClear, cacheCount } from "./cache.js";
 import { buildSeries, summaryRows } from "./series.js";
 import { dualAxisLineChart, escapeHtml, exportPDF, legend } from "./chart.js";
 import { MapPicker, PIN_COLORS, coordName, reverseGeocode } from "./map-picker.js";
-import { bindOffline, describeWeather, isNetworkError, setOffline, toast } from "./ui.js";
+import { bindOffline, describeWeather, isNetworkError, renderMarkdown, setOffline, toast } from "./ui.js";
+import { MAX_YEARS, PROSE_REMINDER, buildMessages, buildSummary, checkAnswer, describeAsk, followUps, quickQuestions,
+         quickSummary } from "./insights.js";
+import { DEVICE_MODELS, PROVIDERS, ask, cloudConfigured, dataSaver, deviceModelDownloaded, deviceModelOf, deviceModelReady,
+         deviceSupport, dismissOffer, loadAISettings, loadDeviceModel, offerDismissed, plannedEngine, providerOf,
+         removeDeviceModel, saveAISettings } from "./ai.js";
 
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";
 
 const $ = (id) => document.getElementById(id);
 const today = (() => {
@@ -30,6 +35,14 @@ let lastDrawn = null;
 let showAllYears = false;
 let fieldSlot = 0;
 let sourceFilter = "all";
+let ai = loadAISettings();
+let askAbort = null;          // AbortController of the question being answered
+let answeredFor = null;       // the lastDrawn the visible answer is about
+let askHistory = [];          // {q, a, engine} answered about lastDrawn, newest last
+let askCurrent = null;        // the answer on screen, also the last of askHistory
+// A question that arrived in the link (q=) is asked once the chart is up. Only
+// from the link: a question remembered from last time should not fire itself.
+let pendingQuestion = location.hash ? state.question : "";
 
 // ---------------------------------------------------------------- helpers
 
@@ -392,15 +405,6 @@ function bindOptions() {
 
 function setStatus(html) { $("loadStatus").innerHTML = html; }
 
-function yearsText(years) {
-  // 1990,1991,1992,2001 -> "1990–1992, 2001"
-  const runs = [];
-  for (const y of [...years].sort((a, b) => a - b)) {
-    const last = runs[runs.length - 1];
-    if (last && y === last[1] + 1) last[1] = y; else runs.push([y, y]);
-  }
-  return runs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(", ");
-}
 
 async function refresh() {
   const seq = ++refreshSeq;
@@ -414,6 +418,7 @@ async function refresh() {
     $("chart").innerHTML = `<div class="text-sm text-slate-400 p-8 text-center"><i class="fa-solid fa-map-location-dot text-2xl mb-2 block"></i>Choose a location on the map to begin</div>`;
     $("legend").innerHTML = ""; $("summary").innerHTML = ""; $("chartSubtitle").textContent = "";
     setStatus("");
+    renderAskChips();
     return;
   }
   if (!years.length) {
@@ -421,6 +426,7 @@ async function refresh() {
     $("chart").innerHTML = `<div class="text-sm text-slate-400 p-8 text-center">Pick at least one year below</div>`;
     $("legend").innerHTML = ""; $("summary").innerHTML = "";
     setStatus("");
+    renderAskChips();
     return;
   }
 
@@ -488,6 +494,7 @@ function draw() {
   legend($("legend"), legendItems);
   $("chartSubtitle").textContent = `${locs.map((l) => `${l.id}: ${l.name}`).join("  ·  ")}${mode === "diff" ? "  ·  showing A − B" : ""}`;
   renderSummary(summaryRows({ specs: ss, years, locs, data, today, units: state.units }), locs);
+  renderAskChips();
 }
 
 function fmt(v, decimals) {
@@ -509,11 +516,349 @@ function renderSummary(rows, locs) {
     const cells = r.stats.map((s) => [s?.mean, s?.min, s?.max, ...(anyTotal ? [s?.total] : [])]
       .map((v) => `<td>${fmt(v, r.decimals)}</td>`).join("")).join("");
     const diff = two ? `<td>${fmt(r.diff?.mean, r.decimals)}</td>${anyTotal ? `<td>${fmt(r.diff?.total, r.decimals)}</td>` : ""}` : "";
-    return `<tr><td>${escapeHtml(r.label)}<span class="text-slate-400">${u}</span></td><td>${r.year}${r.year === today.year ? "*" : ""}</td>${cells}${diff}</tr>`;
+    return `<tr><td>${escapeHtml(r.label)}<span class="text-slate-400">${u}</span></td><td>${r.year}${r.partial ? "*" : ""}</td>${cells}${diff}</tr>`;
   }).join("");
-  const partial = rows.some((r) => r.year === today.year)
+  const partial = rows.some((r) => r.partial)
     ? `<div class="text-xs text-slate-400 mt-1">* ${today.year} so far.</div>` : "";
   $("summary").innerHTML = `<table class="summary w-full"><thead>${head1}${head2}</thead><tbody>${body}</tbody></table>${partial}`;
+}
+
+// ---------------------------------------------------------------- ask about this comparison
+
+function engineLabel(engine) {
+  if (engine === "device") return `On this device · ${deviceModelOf(ai).name}`;
+  if (engine === "cloud") return `Cloud · ${providerOf(ai).name}`;
+  return "Not set up";
+}
+
+function askBusy(busy) {
+  $("askBtn").classList.toggle("hidden", busy);
+  $("askStopBtn").classList.toggle("hidden", !busy);
+  $("askInput").disabled = busy;
+  $("askChips").querySelectorAll("button").forEach((b) => { b.disabled = busy; });
+}
+
+function askProgress(p, text) {
+  if (p == null) { $("askProgress").classList.add("hidden"); return; }
+  const pct = Math.round(Math.max(0, Math.min(1, p)) * 100);
+  $("askProgress").classList.remove("hidden");
+  $("askProgressBar").style.width = `${pct}%`;
+  $("askProgressText").textContent = `${pct}% · ${text}`;
+}
+
+// The answer box before the first word arrives: what is happening and what
+// is being looked at, rather than an empty box.
+function askWaiting(text, { detail, engine }) {
+  $("askAnswer").classList.remove("streaming", "ask-unavailable");
+  $("askAnswer").innerHTML = `<div class="ask-waiting">
+    <div class="font-semibold"><i class="fa-solid fa-hourglass-half fa-spin"></i> ${escapeHtml(text)}</div>
+    <div>${escapeHtml(detail)}</div>
+    <div class="text-xs">Using free AI model · ${escapeHtml(engine)}</div></div>`;
+}
+
+// No engine can answer: offline, the free tier refused, or nothing set up
+// to fall back to. The chart and summary are unaffected, so say so.
+function unavailableHtml(detail) {
+  return `<div class="font-semibold"><i class="fa-solid fa-triangle-exclamation"></i> Free AI is currently unavailable</div>
+    <div>You can still view the chart and summary table. Try again when you have a connection, or use the on-device
+      model if it is already downloaded.</div>${detail ? `<div class="text-xs mt-1">${escapeHtml(detail)}</div>` : ""}`;
+}
+function askUnavailable(detail) {
+  $("askAnswer").classList.remove("streaming");
+  $("askAnswer").classList.add("ask-unavailable");
+  $("askAnswer").innerHTML = unavailableHtml(detail);
+}
+
+// Chips depend only on what is drawn, so they are rebuilt only when that
+// changes - and an answer about an earlier view is put away then too.
+let askQuestions = [];
+let chipsFor;
+function renderAskChips() {
+  if (chipsFor === lastDrawn) return;
+  chipsFor = lastDrawn;
+  askQuestions = lastDrawn ? quickQuestions({ ...lastDrawn, today }) : [];
+  $("askChipsWrap").classList.toggle("hidden", !askQuestions.length);
+  $("askChips").innerHTML = askQuestions.map((q, i) =>
+    `<button type="button" class="ask-chip" data-i="${i}"${askAbort ? " disabled" : ""}>${escapeHtml(q)}</button>`).join("");
+  renderQuickRead();
+  if (answeredFor && answeredFor !== lastDrawn && !askAbort) {
+    $("askAnswerWrap").classList.add("hidden");
+    answeredFor = null;
+    askHistory = [];
+    askCurrent = null;
+    renderAskHistory();
+  }
+  if (pendingQuestion && lastDrawn && !askAbort) {
+    const q = pendingQuestion;
+    pendingQuestion = "";
+    $("askInput").value = q;
+    runAsk(q);
+  }
+}
+
+// The quick read: what the summary says in words, with no model involved.
+function renderQuickRead() {
+  const lines = lastDrawn ? quickSummary(buildSummary({ ...lastDrawn, mode: state.mode, today, units: state.units })) : [];
+  $("askQuick").classList.toggle("hidden", !lines.length);
+  $("askQuick").innerHTML = lines.length
+    ? `<div class="ask-quick-title"><i class="fa-solid fa-bolt"></i> Quick read</div>${lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("")}`
+    : "";
+}
+
+// Earlier answers about this chart, folded up under the current one.
+function renderAskHistory() {
+  const earlier = askHistory.filter((h) => h !== askCurrent).reverse();
+  $("askHistory").classList.toggle("hidden", !earlier.length);
+  $("askHistory").innerHTML = earlier.map((h, i) => `<details class="ask-history" data-i="${i}">
+    <summary><i class="fa-regular fa-comment"></i> ${escapeHtml(h.q)}</summary>
+    <div class="ask-answer text-sm">${renderMarkdown(h.a)}</div>
+    <div class="text-xs text-slate-400 mt-1">${escapeHtml(engineLabel(h.engine))}</div></details>`).join("");
+}
+
+function renderFollowUps(question) {
+  const qs = lastDrawn ? followUps({ question, years: lastDrawn.years }) : [];
+  $("askFollowUps").classList.toggle("hidden", !qs.length);
+  $("askFollowUps").innerHTML = qs.map((q) => `<button type="button" class="ask-chip follow" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("");
+}
+
+// The engine badge and, when nothing can answer, what to do about it.
+// Depends on the AI settings, the connection and the downloaded model.
+async function renderAskEngine() {
+  $("askCard").classList.toggle("hidden", ai.engine === "off");
+  if (ai.engine === "off") return;
+  const planned = await plannedEngine(ai);
+  $("askEngine").textContent = engineLabel(planned);
+  const setup = $("askSetup");
+  const offline = ai.engine !== "device" && cloudConfigured(ai) && !navigator.onLine;
+  setup.classList.toggle("hidden", !!planned);
+  setup.classList.toggle("ask-unavailable", !planned && offline);
+  if (planned) return;
+  if (offline) { setup.innerHTML = unavailableHtml(""); return; }
+
+  const dev = await deviceSupport();
+  const auto = ai.engine === "auto";
+  const keyBtn = (text) => `<button type="button" class="btn" data-act="settings"><i class="fa-solid fa-key"></i> ${text}</button>`;
+  let message;
+  let buttons;
+  if (dev.ok && ai.engine !== "cloud" && offerDismissed()) {
+    // "Not now" was pressed: one quiet line instead of the offer.
+    message = "AI answers are off until the on-device model is downloaded or a cloud key is added.";
+    buttons = keyBtn("Set up");
+  } else if (dev.ok && ai.engine !== "cloud") {
+    const { size } = deviceModelOf(ai);
+    message = `This device can answer privately, offline, with a model that downloads once (about ${size}).${
+      dataSaver() ? " This connection is set to save data, so you may want to wait for Wi-Fi." : ""}${
+      auto ? " Or add a free Gemini or Groq key to use the cloud instead." : ""}`;
+    buttons = `<button type="button" class="btn btn-primary" data-act="download"><i class="fa-solid fa-download"></i> Download (${size})</button>${
+      auto ? keyBtn("Use a cloud key") : ""}<button type="button" class="btn" data-act="dismiss">Not now</button>`;
+  } else {
+    const reason = dev.reason || "On-device AI is unavailable";
+    message = ai.engine === "device" ? `${reason}.`
+      : `${dev.ok ? "" : `${reason}, so answers need a free cloud key. `}Add a free Gemini or Groq key${navigator.onLine ? "" : " (and a connection)"} in Settings.`;
+    buttons = keyBtn("AI settings");
+  }
+  setup.innerHTML = `<div>${escapeHtml(message)}</div><div class="flex gap-2 flex-wrap">${buttons}</div>`;
+}
+
+async function downloadDeviceModel() {
+  $("askSetup").classList.add("hidden");
+  try {
+    await loadDeviceModel(ai.deviceModel, (p, text) => askProgress(p, text));
+    toast("On-device model ready");
+  } catch (err) {
+    console.error("On-device model failed to load:", err);
+    toast(`Couldn't load the on-device model: ${err.message}`);
+  } finally {
+    askProgress(null);
+    renderAskEngine();
+  }
+}
+
+// `force` ("cloud") asks that engine with no fallback: the "ask the cloud
+// model instead" button. `followUp` sends the earlier answers about this
+// chart along, so "why?" has something to refer to.
+async function runAsk(question, force, { followUp = false } = {}) {
+  question = (question || "").trim().slice(0, MAX_QUESTION);
+  if (!question || askAbort) return;
+  if (!lastDrawn) { toast("Choose a location and a year first"); return; }
+  const engine = force || await plannedEngine(ai);
+  if (!engine) {
+    renderAskEngine();
+    if (cloudConfigured(ai) && !navigator.onLine) {
+      $("askAnswerWrap").classList.remove("hidden");
+      $("askQuestion").textContent = question;
+      $("askMeta").textContent = "";
+      askUnavailable("");
+    } else {
+      toast("Set up the AI assistant first");
+    }
+    return;
+  }
+
+  const drawn = lastDrawn;
+  const summary = buildSummary({ ...drawn, mode: state.mode, today, units: state.units,
+    maxYears: engine === "device" ? MAX_YEARS.device : MAX_YEARS.cloud, monthly: engine === "cloud" });
+  const history = followUp ? askHistory.slice(-3) : [];
+  const view = { detail: describeAsk(drawn), engine: engineLabel(engine) };
+  let loadingModel = false;
+  askAbort = new AbortController();
+  if (answeredFor !== drawn) { askHistory = []; askCurrent = null; }
+  answeredFor = drawn;
+  askBusy(true);
+  state.question = question;
+  saveState(state);
+  $("askAnswerWrap").classList.remove("hidden");
+  $("askQuestion").textContent = question;
+  $("askAnswerWrap").setAttribute("aria-busy", "true");
+  askWaiting("Thinking…", view);
+  $("askMeta").textContent = "";
+  $("askNote").classList.add("hidden");
+  $("askCloudBtn").classList.add("hidden");
+  $("askTools").classList.add("hidden");
+  $("askFollowUps").classList.add("hidden");
+  renderAskHistory();
+  const onToken = (text) => {
+    $("askAnswer").classList.add("streaming");
+    $("askAnswer").innerHTML = renderMarkdown(text);
+  };
+  try {
+    const options = { settings: ai, engine, fallback: !force && ai.engine === "auto", signal: askAbort.signal, onToken };
+    let res = await ask({
+      ...options, messages: buildMessages(summary, question, history),
+      onProgress: (p, text) => {
+        askProgress(p < 1 ? p : null, text);
+        // Only redraw the box when the phase changes, not on every one of
+        // the hundreds of progress events a model load sends.
+        if (loadingModel !== p < 1) {
+          loadingModel = p < 1;
+          askWaiting(loadingModel ? "Loading the on-device model…" : "Thinking…", view);
+        }
+      },
+      onFallback: (err) => {
+        console.warn("On-device model failed, using the cloud:", err);
+        askProgress(null);
+        view.engine = `${engineLabel("cloud")} (on-device model unavailable)`;
+        askWaiting("Thinking…", view);
+      },
+    });
+    // A small model sometimes echoes the JSON instead of answering: one
+    // more go, told not to. A year that isn't on the chart gets a warning.
+    let check = checkAnswer(res.text, summary);
+    if (check.retry) {
+      askWaiting("Trying again…", view);
+      res = await ask({ ...options, engine: res.engine, fallback: false,
+        messages: buildMessages(summary, `${question}\n\n${PROSE_REMINDER}`, history) });
+      check = checkAnswer(res.text, summary);
+    }
+    if (!res.text.trim()) $("askAnswer").textContent = "(No answer came back.)";
+    $("askNote").classList.toggle("hidden", !check.note);
+    $("askNote").textContent = check.note || "";
+    $("askMeta").textContent = `Source: free AI, ${engineLabel(res.engine)} • Based on current chart data`;
+    $("askCloudBtn").classList.toggle("hidden", !(res.engine === "device" && cloudConfigured(ai) && navigator.onLine));
+    $("askCloudBtn").onclick = () => runAsk(question, "cloud", { followUp });
+    $("askTools").classList.remove("hidden");
+    askCurrent = { q: question, a: res.text, engine: res.engine };
+    askHistory = [...askHistory.filter((h) => h.q !== question), askCurrent].slice(-6);
+    renderAskHistory();
+    renderFollowUps(question);
+  } catch (err) {
+    if (askAbort.signal.aborted) {
+      if ($("askAnswer").querySelector(".ask-waiting")) $("askAnswer").textContent = "";
+      $("askMeta").textContent = "Stopped";
+    } else {
+      console.error("Ask failed:", err);
+      askUnavailable(isNetworkError(err) ? "" : err.message);
+    }
+  } finally {
+    askProgress(null);
+    $("askAnswer").classList.remove("streaming");
+    $("askAnswerWrap").setAttribute("aria-busy", "false");
+    askAbort = null;
+    askBusy(false);
+  }
+}
+
+function bindAsk() {
+  $("askForm").addEventListener("submit", (e) => { e.preventDefault(); runAsk($("askInput").value); });
+  $("askStopBtn").addEventListener("click", () => askAbort?.abort());
+  $("askSettingsBtn").addEventListener("click", openAISettings);
+  $("askChips").addEventListener("click", (e) => {
+    const q = askQuestions[Number(e.target.closest("[data-i]")?.dataset.i)];
+    if (q) { $("askInput").value = q; runAsk(q); }
+  });
+  $("askSetup").addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "download") downloadDeviceModel();
+    if (act === "settings") openAISettings();
+    if (act === "dismiss") { dismissOffer(); renderAskEngine(); }
+  });
+  $("askFollowUps").addEventListener("click", (e) => {
+    const q = e.target.closest("[data-q]")?.dataset.q;
+    if (q) { $("askInput").value = q; runAsk(q, undefined, { followUp: true }); }
+  });
+  const answerText = () => `${askCurrent.q}\n\n${askCurrent.a}\n\n${$("chartSubtitle").textContent} · ${engineLabel(askCurrent.engine)}`;
+  $("askCopyBtn").addEventListener("click", async () => {
+    if (!askCurrent) return;
+    try { await navigator.clipboard.writeText(answerText()); toast("Answer copied"); } catch { toast("Couldn't copy"); }
+  });
+  $("askShareBtn").classList.toggle("hidden", !navigator.share);
+  $("askShareBtn").addEventListener("click", async () => {
+    if (!askCurrent) return;
+    try { await navigator.share({ title: "Weather Compare", text: answerText(), url: location.href }); } catch { /* cancelled */ }
+  });
+  window.addEventListener("online", renderAskEngine);
+  window.addEventListener("offline", renderAskEngine);
+}
+
+// AI part of the settings dialog.
+async function openAISettings() {
+  await openSettings();
+  $("aiSettings").scrollIntoView({ block: "nearest" });
+}
+
+async function renderAISettings() {
+  const p = providerOf(ai);
+  $("aiEngine").value = ai.engine;
+  $("aiDeviceModel").value = ai.deviceModel;
+  $("aiProvider").value = ai.provider;
+  $("aiKey").value = ai.apiKey;
+  $("aiEndpoint").value = ai.endpoint;
+  $("aiCloudModel").value = ai.cloudModel;
+  $("aiCloudModel").placeholder = p.model;
+  $("aiKeyLink").classList.toggle("hidden", !p.keyUrl);
+  $("aiKeyLink").href = p.keyUrl || "#";
+  $("aiEndpointWrap").classList.toggle("hidden", ai.provider !== "custom");
+  $("aiDeviceBox").classList.toggle("hidden", ai.engine === "cloud" || ai.engine === "off");
+  $("aiCloudBox").classList.toggle("hidden", ai.engine === "device" || ai.engine === "off");
+  const dev = await deviceSupport();
+  const ready = deviceModelReady();
+  const readyHere = await deviceModelDownloaded(ai);
+  $("aiDownloadBtn").disabled = !dev.ok || readyHere;
+  $("aiRemoveBtn").disabled = !ready;
+  $("aiDeviceInfo").textContent = !dev.ok ? dev.reason : readyHere ? "Downloaded - works offline" : ready ? `${ready} is downloaded` : "Not downloaded";
+}
+
+function bindAISettings() {
+  $("aiDeviceModel").innerHTML = DEVICE_MODELS.map((m) => `<option value="${m.id}">${escapeHtml(m.label)}</option>`).join("");
+  $("aiProvider").innerHTML = Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}">${escapeHtml(p.label)}</option>`).join("");
+  const onChange = () => {
+    const provider = $("aiProvider").value;
+    ai = { ...ai, engine: $("aiEngine").value, deviceModel: $("aiDeviceModel").value, provider,
+           apiKey: $("aiKey").value.trim(), endpoint: $("aiEndpoint").value.trim(),
+           // A model name belongs to its provider: start blank after a switch.
+           cloudModel: provider === ai.provider ? $("aiCloudModel").value.trim() : "" };
+    saveAISettings(ai);
+    renderAISettings();
+    renderAskEngine();
+  };
+  ["aiEngine", "aiDeviceModel", "aiProvider", "aiKey", "aiEndpoint", "aiCloudModel"]
+    .forEach((id) => $(id).addEventListener("change", onChange));
+  $("aiDownloadBtn").addEventListener("click", () => { $("settingsDialog").close(); downloadDeviceModel(); });
+  $("aiRemoveBtn").addEventListener("click", async () => {
+    try { await removeDeviceModel(); toast("On-device model removed"); } catch (err) { toast(`Couldn't remove the model: ${err.message}`); }
+    renderAISettings();
+    renderAskEngine();
+  });
 }
 
 // ---------------------------------------------------------------- header, settings, PDF
@@ -534,14 +879,17 @@ async function renderHeaderWeather() {
   $("headerWeather").innerHTML = lines.join("");
 }
 
+async function openSettings() {
+  $("unitTemp").value = state.units.temperature;
+  $("unitWind").value = state.units.wind;
+  $("unitPrecip").value = state.units.precipitation;
+  renderAISettings();
+  $("cacheInfo").textContent = `${await cacheCount()} year-series saved`;
+  $("settingsDialog").showModal();
+}
+
 function bindSettings() {
-  $("settingsBtn").addEventListener("click", async () => {
-    $("unitTemp").value = state.units.temperature;
-    $("unitWind").value = state.units.wind;
-    $("unitPrecip").value = state.units.precipitation;
-    $("cacheInfo").textContent = `${await cacheCount()} year-series saved`;
-    $("settingsDialog").showModal();
-  });
+  $("settingsBtn").addEventListener("click", openSettings);
   const onUnits = () => {
     state.units = { temperature: $("unitTemp").value, wind: $("unitWind").value, precipitation: $("unitPrecip").value };
     update();
@@ -561,7 +909,21 @@ function bindSettings() {
     try {
       const title = lastDrawn.specs.map((s) => s.field.label).join(" & ");
       const subtitle = `${lastDrawn.locs.map((l) => l.name).join(" vs ")} · ${yearsText(lastDrawn.years)}`;
-      await exportPDF($("chartExport"), { title, subtitle, filename: `${`${title} ${subtitle}`.replace(/[^a-zA-Z0-9]+/g, "_")}.pdf` });
+      // The AI answer lives outside the chart card; when asked for, a copy
+      // rides along at the bottom of the export and is removed afterwards.
+      if ($("pdfIncludeAnswer").checked && askCurrent && answeredFor === lastDrawn) {
+        const block = document.createElement("div");
+        block.className = "pdf-answer";
+        block.innerHTML = `<div class="font-semibold">AI answer: ${escapeHtml(askCurrent.q)}</div>
+          <div class="ask-answer">${renderMarkdown(askCurrent.a)}</div>
+          <div class="text-xs text-slate-400 mt-1">Free AI, ${escapeHtml(engineLabel(askCurrent.engine))} - check against the figures above.</div>`;
+        $("chartExport").appendChild(block);
+      }
+      try {
+        await exportPDF($("chartExport"), { title, subtitle, filename: `${`${title} ${subtitle}`.replace(/[^a-zA-Z0-9]+/g, "_")}.pdf` });
+      } finally {
+        $("chartExport").querySelector(".pdf-answer")?.remove();
+      }
     } catch (err) {
       console.error("PDF export failed:", err);
       toast("Could not create PDF");
@@ -582,6 +944,9 @@ function start() {
   bindFieldDialog();
   bindOptions();
   bindSettings();
+  bindAsk();
+  bindAISettings();
+  renderAskEngine();
 
   try {
     picker = new MapPicker($("map"), { onPlace: (id, ll) => placeLocation(id, ll) });
@@ -603,6 +968,7 @@ function start() {
 
   window.addEventListener("hashchange", () => {
     const next = loadState(today.year);
+    if (next.question && next.question !== askCurrent?.q) pendingQuestion = next.question;
     state = next;
     update();
     picker?.fit(state.locs);

@@ -52,3 +52,13 @@ export function dateFromYearX(year, x) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${year}-${pad(md.getUTCMonth() + 1)}-${pad(md.getUTCDate())}`;
 }
+
+// 1990,1991,1992,2001 -> "1990–1992, 2001"
+export function yearsText(years) {
+  const runs = [];
+  for (const y of [...years].sort((a, b) => a - b)) {
+    const last = runs[runs.length - 1];
+    if (last && y === last[1] + 1) last[1] = y; else runs.push([y, y]);
+  }
+  return runs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(", ");
+}

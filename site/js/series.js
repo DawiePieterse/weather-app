@@ -132,7 +132,8 @@ export function summarize(values, total) {
 // One row per measurement x year: each location's mean/min/max (and total,
 // for amounts like rain), plus A minus B. Observed days only - a forecast is
 // not a record - and only days both locations have, when comparing, so the
-// difference is like for like.
+// difference is like for like. `points` keeps those shared days per location
+// ([x, value] pairs) for anything that needs dates, like the AI summary.
 export function summaryRows({ specs, years, locs, data, today, units }) {
   const rows = [];
   for (const spec of specs) {
@@ -147,8 +148,10 @@ export function summaryRows({ specs, years, locs, data, today, units }) {
         : [...perLoc[0].keys()];
       const stats = perLoc.map((m) => summarize(shared.map((x) => m.get(x)), total));
       if (stats.every((s) => !s)) continue;
+      const points = perLoc.map((m) => shared.map((x) => [x, m.get(x)]));
       rows.push({
-        label: specLabel(spec), year, unit: unitLabel(spec.field, units), decimals: decimalsFor(spec.field),
+        points,
+        spec, label: specLabel(spec), year, partial: fadeFromX(spec.field, year, today) != null, unit: unitLabel(spec.field, units), decimals: decimalsFor(spec.field),
         total, stats, days: shared.length,
         diff: stats.length === 2 && stats[0] && stats[1] ? {
           mean: stats[0].mean - stats[1].mean,

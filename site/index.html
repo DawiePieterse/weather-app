@@ -115,6 +115,49 @@
     <div id="summary" class="overflow-x-auto text-sm"></div>
   </section>
 
+  <!-- Ask -->
+  <section class="card space-y-3" id="askCard">
+    <div class="flex items-center justify-between gap-2 flex-wrap">
+      <div class="font-semibold"><i class="fa-solid fa-robot"></i> Ask about this comparison</div>
+      <button id="askSettingsBtn" class="text-xs text-slate-500 hover:text-slate-700" title="AI settings">
+        <span id="askEngine"></span> <i class="fa-solid fa-sliders"></i></button>
+    </div>
+    <div id="askQuick" class="hidden ask-quick text-sm"></div>
+    <div id="askChipsWrap">
+      <div class="text-xs text-slate-500 mb-1">Suggested questions:</div>
+      <div id="askChips" class="flex flex-wrap gap-1.5"></div>
+    </div>
+    <form id="askForm" class="flex gap-2">
+      <input id="askInput" type="text" autocomplete="off" maxlength="500" placeholder="Type your own question…"
+             class="flex-1 min-w-0 border border-slate-300 rounded-lg p-2 text-sm">
+      <button id="askBtn" type="submit" class="btn btn-primary"><i class="fa-solid fa-paper-plane"></i> Ask</button>
+      <button id="askStopBtn" type="button" class="btn hidden"><i class="fa-solid fa-stop"></i> Stop</button>
+    </form>
+    <div id="askSetup" class="hidden text-sm text-slate-600 space-y-2"></div>
+    <div id="askProgress" class="hidden text-xs text-slate-500 space-y-1">
+      <div class="ask-bar"><div id="askProgressBar"></div></div>
+      <div id="askProgressText"></div>
+    </div>
+    <div id="askAnswerWrap" class="hidden">
+      <div class="text-sm font-semibold mb-0.5">AI Answer</div>
+      <div id="askQuestion" class="text-xs text-slate-500 mb-1"></div>
+      <div id="askAnswer" class="ask-answer text-sm" aria-live="polite"></div>
+      <div id="askNote" class="hidden text-xs text-amber-700 mt-1"></div>
+      <div class="flex items-center gap-x-3 gap-y-1 mt-2 text-xs text-slate-400 flex-wrap">
+        <span id="askMeta"></span>
+        <button id="askCloudBtn" class="hidden underline hover:text-slate-600">Ask the cloud model instead</button>
+        <span id="askTools" class="hidden inline-flex items-center gap-3">
+          <button id="askCopyBtn" class="hover:text-slate-600" title="Copy the answer"><i class="fa-regular fa-copy"></i> Copy</button>
+          <button id="askShareBtn" class="hidden hover:text-slate-600" title="Share the answer"><i class="fa-solid fa-share-nodes"></i> Share</button>
+          <label class="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" id="pdfIncludeAnswer"> Include in PDF</label>
+        </span>
+      </div>
+      <div id="askFollowUps" class="hidden flex flex-wrap gap-1.5 mt-2"></div>
+    </div>
+    <div id="askHistory" class="hidden space-y-1"></div>
+    <div class="text-xs text-slate-400">Answers come from a language model reading the figures above &mdash; check anything important against the chart.</div>
+  </section>
+
   <footer class="text-xs text-slate-500 text-center space-y-1">
     <div>Weather data by <a class="underline" href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0) &middot;
       Map &copy; <a class="underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div>
@@ -160,6 +203,37 @@
       <div>Downloaded data is kept on this device so years you have already looked at open instantly and work offline.</div>
       <div class="flex items-center gap-3"><button id="clearCacheBtn" class="btn"><i class="fa-solid fa-trash"></i> Clear downloaded data</button>
         <span id="cacheInfo" class="text-xs text-slate-500"></span></div>
+    </div>
+    <div class="border-t pt-3 text-sm space-y-2" id="aiSettings">
+      <div class="font-semibold">AI assistant</div>
+      <label class="block">Engine
+        <select id="aiEngine" class="block w-full border border-slate-300 rounded p-1.5 mt-1">
+          <option value="auto">Automatic &mdash; on this device, cloud as fallback</option>
+          <option value="device">On this device only (private, works offline)</option>
+          <option value="cloud">Cloud only (free tier, needs a connection)</option>
+          <option value="off">Off</option>
+        </select></label>
+      <div id="aiDeviceBox" class="space-y-2">
+        <label class="block">On-device model
+          <select id="aiDeviceModel" class="block w-full border border-slate-300 rounded p-1.5 mt-1"></select></label>
+        <div class="flex items-center gap-3 flex-wrap">
+          <button id="aiDownloadBtn" class="btn"><i class="fa-solid fa-download"></i> Download model</button>
+          <button id="aiRemoveBtn" class="btn"><i class="fa-solid fa-trash"></i> Remove model</button>
+          <span id="aiDeviceInfo" class="text-xs text-slate-500"></span>
+        </div>
+      </div>
+      <div id="aiCloudBox" class="space-y-2">
+        <label class="block">Cloud provider
+          <select id="aiProvider" class="block w-full border border-slate-300 rounded p-1.5 mt-1"></select></label>
+        <label class="block" id="aiEndpointWrap">Endpoint URL
+          <input id="aiEndpoint" type="url" placeholder="https://your-worker.workers.dev/v1/chat/completions" class="block w-full border border-slate-300 rounded p-1.5 mt-1"></label>
+        <label class="block">API key <a id="aiKeyLink" class="text-xs underline text-slate-500" target="_blank" rel="noopener">get a free key</a>
+          <input id="aiKey" type="password" autocomplete="off" class="block w-full border border-slate-300 rounded p-1.5 mt-1"></label>
+        <label class="block">Model <span class="text-xs text-slate-500">(blank for the default)</span>
+          <input id="aiCloudModel" type="text" autocomplete="off" class="block w-full border border-slate-300 rounded p-1.5 mt-1"></label>
+        <div class="text-xs text-slate-500">The key is kept only in this browser and is never put in shared links. Questions sent to a cloud
+          provider include the locations and figures on the chart.</div>
+      </div>
     </div>
     <div class="border-t pt-3 text-xs text-slate-500">
       Data: Open-Meteo &mdash; free for non-commercial use, about 10,000 requests a day. Historical weather is the ERA5
