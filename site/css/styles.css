@@ -73,3 +73,29 @@ dialog::backdrop { background: rgba(15, 23, 42, 0.45); }
   max-width: calc(100vw - 2rem); text-align: center;
 }
 .toast.show { opacity: 1; }
+
+.ask-chip { font-size: 0.78rem; padding: 0.25rem 0.65rem; border-radius: 999px; background: #eef2ff; color: #3730a3;
+            border: 1px solid #e0e7ff; }
+.ask-chip:hover { background: #e0e7ff; }
+.ask-chip:disabled { opacity: 0.5; cursor: default; }
+.ask-answer { white-space: pre-wrap; line-height: 1.5; background: #f8fafc; border-radius: 0.5rem; padding: 0.6rem 0.8rem; }
+.ask-bar { height: 4px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
+.ask-bar > div { height: 100%; width: 0; background: var(--wx-blue); transition: width 0.2s; }
+.ask-answer.streaming::after { content: "▍"; color: #94a3b8; animation: ask-blink 1s steps(1) infinite; }
+@keyframes ask-blink { 50% { opacity: 0; } }
+.ask-waiting { display: flex; flex-direction: column; gap: 0.15rem; color: #64748b; }
+.ask-unavailable { white-space: normal; background: #fffbeb; color: #92400e; border: 1px solid #fde68a; border-radius: 0.5rem; padding: 0.6rem 0.8rem; }
+.ask-quick { background: #f0f9ff; border: 1px solid #bae6fd; color: #0c4a6e; border-radius: 0.5rem; padding: 0.6rem 0.8rem; }
+.ask-quick .ask-quick-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: #0369a1; margin-bottom: 0.2rem; }
+.ask-answer p + p, .ask-answer ul, .ask-answer ol { margin-top: 0.4rem; }
+.ask-answer ul { list-style: disc; padding-left: 1.25rem; }
+.ask-answer ol { list-style: decimal; padding-left: 1.25rem; }
+.ask-answer h4 { font-weight: 600; margin-top: 0.4rem; }
+.ask-answer code { background: #e2e8f0; border-radius: 0.25rem; padding: 0 0.25rem; font-size: 0.85em; }
+.ask-chip.follow { background: #f1f5f9; color: #334155; border-color: #e2e8f0; }
+.ask-history details { border: 1px solid #e2e8f0; border-radius: 0.5rem; padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+.ask-history summary { cursor: pointer; color: #475569; }
+.ask-history summary:hover { color: #0f172a; }
+.ask-history .ask-answer { margin-top: 0.4rem; white-space: normal; }
+.pdf-answer { margin-top: 0.75rem; border-top: 1px solid #e2e8f0; padding-top: 0.5rem; font-size: 0.85rem; }
+.pdf-answer .ask-answer { white-space: normal; }

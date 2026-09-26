@@ -4,11 +4,15 @@
 //
 // Hash format, every part optional:
 //   #a=-33.9249,18.4241,Cape%20Town&b=...&f=wd.temperature_2m_mean,wh.wind_gusts_10m:max
-//    &y=2024,2025&m=diff&u=celsius,kmh,mm&cm=MRI_AGCM3_2_S&fc=0
+//    &y=2024,2025&m=diff&u=celsius,kmh,mm&cm=MRI_AGCM3_2_S&fc=0&q=Which%20place%20was%20wetter%3F
+//
+// q is a question for the AI assistant, so a link opens with it already
+// asked. It is the only part that is not about the chart.
 
 import { UNIT_TOKENS, defaultAgg, fieldById } from "./fields.js";
 
 export const MAX_FIELDS = 2;
+export const MAX_QUESTION = 500;
 const STORAGE_KEY = "wx_state_v1";
 
 export function defaultState(currentYear) {
@@ -20,6 +24,7 @@ export function defaultState(currentYear) {
     units: { temperature: "celsius", wind: "kmh", precipitation: "mm" },
     climateModel: "MRI_AGCM3_2_S",
     showForecast: true,
+    question: "",
   };
 }
 
@@ -54,6 +59,7 @@ export function encodeState(st) {
   }
   if (st.fields.some((f) => fieldById(f.id)?.source === "climate")) p.push(`cm=${st.climateModel}`);
   if (!st.showForecast) p.push("fc=0");
+  if (st.question) p.push(`q=${encodeURIComponent(st.question)}`);
   return p.join("&");
 }
 
@@ -87,6 +93,7 @@ export function decodeState(hash, currentYear) {
   }
   if (params.has("cm")) st.climateModel = params.get("cm");
   if (params.get("fc") === "0") st.showForecast = false;
+  st.question = (params.get("q") || "").trim().slice(0, MAX_QUESTION);
   if (!st.locs.B) st.mode = "overlay";
   return st;
 }

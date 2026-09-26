@@ -138,3 +138,14 @@ test("summaryRows: excludes forecast days and compass-direction fields, computes
   });
   assert.equal(dirRows.length, 0);
 });
+
+test("summaryRows: rows carry the shared-day points per location and a partial flag", () => {
+  const data = {
+    A: new Map([["wd.temperature_2m_mean|-", new Map([[2024, [[90, 10], [100, 20], [110, 999]]]])]]),
+    B: new Map([["wd.temperature_2m_mean|-", new Map([[2024, [[90, 5]]]])]]),
+  };
+  const [row] = summaryRows({ specs: [{ field: fieldById("wd.temperature_2m_mean"), agg: null, key: "wd.temperature_2m_mean|-" }],
+    years: [2024], locs: [{ id: "A" }, { id: "B" }], data, today: { year: 2024, x: 105 }, units });
+  assert.deepEqual(row.points, [[[90, 10]], [[90, 5]]]);
+  assert.equal(row.partial, true);
+});

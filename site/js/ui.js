@@ -49,3 +49,40 @@ export function describeWeather(code, isDay = 1) {
   if (!hit) return { text: "", icon: "fa-cloud" };
   return { text: hit[1], icon: (!isDay && hit[3]) || hit[2] };
 }
+
+// The little Markdown a language model uses in a short answer - headings,
+// bullet and numbered lists, bold, italic, inline code - rendered to HTML with
+// everything escaped first, so an answer can never inject markup. Anything
+// fancier (tables, links) is left as its text.
+export function renderMarkdown(md) {
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = (s) => esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*(\S(?:[^*\n]*\S)?)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
+    .replace(/(^|[\s(])_(\S(?:[^_\n]*\S)?)_(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
+  const out = [];
+  let list = null;           // "ul" | "ol" while inside a list
+  let para = [];
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join(" ")}</p>`); para = []; } };
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  for (const raw of md.replace(/\r/g, "").split("\n")) {
+    const line = raw.trim();
+    const bullet = /^([-*•]|\d+[.)])\s+(.*)$/.exec(line);
+    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    if (!line) { flushPara(); closeList(); continue; }
+    if (bullet) {
+      flushPara();
+      const kind = /^\d/.test(bullet[1]) ? "ol" : "ul";
+      if (list !== kind) { closeList(); list = kind; out.push(`<${kind}>`); }
+      out.push(`<li>${inline(bullet[2])}</li>`);
+      continue;
+    }
+    closeList();
+    if (heading) { flushPara(); out.push(`<h4>${inline(heading[1])}</h4>`); continue; }
+    para.push(line);
+  }
+  flushPara();
+  closeList();
+  return out.join("");
+}

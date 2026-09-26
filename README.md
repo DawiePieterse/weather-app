@@ -29,6 +29,8 @@ site/                  the whole deployed app (this is what GitHub Pages serves)
     chart.js           dependency-free SVG line chart + legend + PDF export
     map-picker.js       Leaflet wrapper: pins, search, reverse geocoding
     ui.js              toast/offline banner/weather-code icons
+    insights.js        chart data -> compact JSON summary + prompt + quick questions (no DOM, unit-tested)
+    ai.js              "Ask" engines: on-device WebLLM, free cloud fallback (Gemini/Groq/OpenAI-compatible)
   vendor/              Leaflet, Font Awesome, html2canvas, jsPDF, Tailwind (all vendored)
 scripts/
   serve.js             tiny static server for local testing (`npm run serve`)
@@ -72,6 +74,21 @@ npm run test:e2e     # Playwright smoke test (installs its own Chromium if neede
   refreshed at most once an hour.
 - **Sharing.** The whole comparison — both locations, fields, years, mode,
   units — lives in the URL hash. Sending the link reproduces the exact chart.
+- **Ask about this comparison.** A question box with quick-question chips
+  answers "so what?" questions from the figures on the chart. `insights.js`
+  turns the Summary table's figures (`summaryRows()`: per-year mean/min/max/
+  total per location, A − B over shared days) into a compact JSON summary
+  with a few highlights (warmest/wettest year, largest difference); `ai.js` answers it
+  with a free engine: by default a small open model running on the device via
+  WebLLM (WebGPU; downloaded once on request, ~1 GB, then offline), falling
+  back to a free cloud tier (Gemini, Groq, or any OpenAI-compatible endpoint
+  such as a Cloudflare Workers AI proxy) with the user's own key. Keys stay
+  in localStorage and never go into the URL. Around the model: a "quick
+  read" (the summary in plain sentences, no model needed), follow-up chips
+  that carry the earlier answers along, a folded history of answers about
+  the current chart, Markdown rendering, copy/share, an "include in PDF"
+  option, and a `q=` hash parameter so a link opens with its question
+  already asked.
 - **Offline.** The app shell (HTML/CSS/JS/vendor files) is cached by a
   service worker; already-downloaded weather years still show with no
   connection.

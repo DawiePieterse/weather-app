@@ -56,3 +56,12 @@ test("encodeState round-trips a location name containing a comma and special cha
   const decoded = decodeState(`#${encodeState(st)}`, 2024);
   assert.equal(decoded.locs.A.name, "Winston-Salem, NC");
 });
+
+test("q= carries the AI question, trimmed and capped, and is left out when empty", () => {
+  const st = decodeState("#a=1,2,X&q=%20Which%20place%20was%20wetter%3F%20", 2024);
+  assert.equal(st.question, "Which place was wetter?");
+  assert.match(encodeState(st), /&q=Which%20place%20was%20wetter%3F$/);
+  st.question = "";
+  assert.ok(!encodeState(st).includes("q="));
+  assert.equal(decodeState(`#a=1,2,X&q=${"x".repeat(600)}`, 2024).question.length, 500);
+});
