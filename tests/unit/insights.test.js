@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_YEARS, PROSE_REMINDER, SYSTEM_PROMPT, buildMessages, buildSummary, checkAnswer, describeAsk, followUps,
          quickQuestions, quickSummary } from "../../site/js/insights.js";
-import { cloudRequest, plannedEngine } from "../../site/js/ai.js";
+import { cloudRequest, plannedEngine, suggestedModel } from "../../site/js/ai.js";
 import { fieldById } from "../../site/js/fields.js";
 import { refX } from "../../site/js/dates.js";
 
@@ -147,7 +147,7 @@ test("quickQuestions: fit what is on the chart", () => {
 test("cloudRequest: Gemini gets a system instruction and key header; OpenAI-style providers get bearer auth", () => {
   const messages = buildMessages({}, "Q");
   const g = cloudRequest(messages, { provider: "gemini", apiKey: "k1", cloudModel: "" });
-  assert.match(g.url, /gemini-2\.5-flash:streamGenerateContent\?alt=sse$/);
+  assert.match(g.url, /gemini-3\.8-flash:streamGenerateContent\?alt=sse$/);
   assert.equal(g.init.headers["x-goog-api-key"], "k1");
   const gb = JSON.parse(g.init.body);
   assert.equal(gb.systemInstruction.parts[0].text, SYSTEM_PROMPT);
@@ -164,6 +164,12 @@ test("cloudRequest: Gemini gets a system instruction and key header; OpenAI-styl
   assert.equal(c.url, "https://w.example/v1");
   assert.equal(c.init.headers.Authorization, undefined);
   assert.equal(JSON.parse(c.init.body).model, "m");
+});
+
+test("suggestedModel: the replacement a provider names in a refusal", () => {
+  assert.equal(suggestedModel("This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features."), "gemini-3.8-flash");
+  assert.equal(suggestedModel("Use llama-3.3-70b-versatile instead"), "llama-3.3-70b-versatile");
+  assert.equal(suggestedModel("free-tier limit reached"), null);
 });
 
 test("plannedEngine: with no WebGPU (as in Node), auto uses the cloud only when a key is set", async () => {
