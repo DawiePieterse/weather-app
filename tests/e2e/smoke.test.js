@@ -118,6 +118,15 @@ test("place two locations, compare a field, and see a difference chart", { timeo
     await page.click('#placeResults button[data-i="0"]');
     await page.waitForSelector('.loc-row .loc-name[data-id="B"]');
 
+    // The first location stays searchable: switch the bar to A and search.
+    await page.click('#searchTarget button[data-target="A"]');
+    assert.match(await page.getAttribute("#placeSearch", "placeholder"), /for A/);
+    await page.fill("#placeSearch", "Paris");
+    await page.waitForSelector('#placeResults button[data-i="0"]');
+    await page.click('#placeResults button[data-i="0"]');
+    await page.waitForFunction(() => document.querySelector('.loc-name[data-id="A"]').value === "Paris");
+    assert.equal(await page.inputValue('.loc-name[data-id="B"]'), "Paris");
+
     // Two locations -> the comparison mode toggle appears, and both a solid
     // and a dashed line should be present once data for B loads too.
     await page.waitForSelector("#modeWrap:not(.hidden)");
