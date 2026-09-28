@@ -101,6 +101,17 @@ function renderLocations() {
     ? "Tap the map, search, or use your location to choose a place."
     : `Tapping the map ${state.locs[settingId] ? "moves" : "places"} <b style="color:${PIN_COLORS[settingId]}">${settingId}</b>. Pins can be dragged.`;
   $("mapHint").innerHTML = hint;
+
+  // Which location the search bar sets. Once there is an A, show an A/B
+  // switch in front of the bar so either one can be searched for.
+  const targets = state.locs.A ? ["A", "B"] : [];
+  $("searchTarget").innerHTML = targets.map((id) => `<button type="button" class="loc-dot ${settingId === id ? "active" : ""}"
+      style="background:${PIN_COLORS[id]}" data-target="${id}" aria-pressed="${settingId === id}"
+      title="Search sets location ${id}">${id}</button>`).join("");
+  $("searchTarget").classList.toggle("hidden", !targets.length);
+  $("placeSearch").placeholder = state.locs.A
+    ? `Search for a place for ${settingId}…` : "Search for a place…";
+  $("placeSearch").setAttribute("aria-label", `Search for a place for location ${settingId}`);
   picker?.setActive(settingId);
   picker?.sync(state.locs);
 }
@@ -143,6 +154,14 @@ function bindLocations() {
     if (!e.target.classList.contains("loc-name")) return;
     const loc = state.locs[e.target.dataset.id];
     if (loc) { loc.name = e.target.value.trim() || coordName(loc.lat, loc.lon); update({ reload: false }); }
+  });
+
+  $("searchTarget").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-target]");
+    if (!btn) return;
+    settingId = btn.dataset.target;
+    renderLocations();
+    $("placeSearch").focus();
   });
 
   let timer = null;
